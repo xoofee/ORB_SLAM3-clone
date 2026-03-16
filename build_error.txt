@@ -1,0 +1,51 @@
+ore '>' token
+  298 | struct object_pointer<T, std::enable_if_t<trait::is_weak_ptr_v<T>>> {
+      |                                                                   ^
+/usr/local/include/sigslot/signal.hpp:306:31: error: 'enable_if_t' is not a member of 'std'
+  306 | struct object_pointer<T, std::enable_if_t<!trait::is_pointer_v<T> &&
+      |                               ^~~~~~~~~~~
+/usr/local/include/sigslot/signal.hpp:306:31: note: 'std::enable_if_t' is only available from C++14 onwards
+/usr/local/include/sigslot/signal.hpp:306:31: error: 'enable_if_t' is not a member of 'std'
+/usr/local/include/sigslot/signal.hpp:306:31: note: 'std::enable_if_t' is only available from C++14 onwards
+/usr/local/include/sigslot/signal.hpp:308:76: error: type/value mismatch at argument 2 in template parameter list for 'template<class T, class> struct sigslot::detail::object_pointer'
+  308 |                                           trait::is_weak_ptr_compatible_v<T>>>
+      |                                                                            ^~
+/usr/local/include/sigslot/signal.hpp:308:76: note:   expected a type, got '(((<expression error> < (! is_pointer_v<T>)) && (! is_weak_ptr_v<T>)) && is_weak_ptr_compatible_v<T>)'
+/usr/local/include/sigslot/signal.hpp:308:78: error: expected unqualified-id before '>' token
+  308 |                                           trait::is_weak_ptr_compatible_v<T>>>
+      |                                                                              ^
+/usr/local/include/sigslot/signal.hpp:398:41: error: 'std::enable_if_t' has not been declared
+  398 |     explicit copy_on_write(U && x, std::enable_if_t<!std::is_same<std::decay_t<U>,
+      |                                         ^~~~~~~~~~~
+/usr/local/include/sigslot/signal.hpp:398:52: error: expected ',' or '...' before '<' token
+  398 |     explicit copy_on_write(U && x, std::enable_if_t<!std::is_same<std::decay_t<U>,
+      |                                                    ^
+/usr/local/include/sigslot/signal.hpp:532:5: error: 'index' function uses 'auto' type specifier without trailing return type
+  532 |     auto index() const {
+      |     ^~~~
+/usr/local/include/sigslot/signal.hpp:532:5: note: deduced return type only available with '-std=c++14' or '-std=gnu++14'
+/usr/local/include/sigslot/signal.hpp:536:5: error: 'index' function uses 'auto' type specifier without trailing return type
+  536 |     auto& index() {
+      |     ^~~~
+/usr/local/include/sigslot/signal.hpp:536:5: note: deduced return type only available with '-std=c++14' or '-std=gnu++14'
+/usr/local/include/sigslot/signal.hpp:1589:5: error: 'cow_type' does not name a type; did you mean 'lock_type'?
+ 1589 |     cow_type<list_type, Lockable> m_slots;
+      |     ^~~~~~~~
+      |     lock_type
+/usr/local/include/sigslot/signal.hpp: In constructor 'sigslot::signal_base< <template-parameter-1-1>, <template-parameter-1-2> >::signal_base(sigslot::signal_base< <template-parameter-1-1>, <template-parameter-1-2> >&&)':
+/usr/local/include/sigslot/signal.hpp:1146:14: error: 'm_slots' was not declared in this scope
+ 1146 |         swap(m_slots, o.m_slots);
+      |              ^~~~~~~
+/usr/local/include/sigslot/signal.hpp: In member function 'const std::type_info& sigslot::detail::slot_tracked<Func, WeakPtr, Args>::get_callable_type() const':
+/usr/local/include/sigslot/signal.hpp:1027:23: error: 'func' was not declared in this scope; did you mean 'Func'?
+ 1027 |         return typeid(func);
+      |                       ^~~~
+      |                       Func
+In file included from /x/work/vslam/codes/vendor/ORB_SLAM3/Thirdparty/g2o/g2o/types/types_six_dof_expmap.h:38,
+                 from /x/work/vslam/codes/vendor/ORB_SLAM3/include/Converter.h:26,
+                 from /x/work/vslam/codes/vendor/ORB_SLAM3/include/Frame.h:33,
+                 from /x/work/vslam/codes/vendor/ORB_SLAM3/include/KeyFrame.h:28,
+                 from /x/work/vslam/codes/vendor/ORB_SLAM3/include/MapPoint.h:23,
+                 from /x/work/vslam/codes/vendor/ORB_SLAM3/include/Map.h:23,
+                 from /x/work/vslam/codes/vendor/ORB_SLAM3/include/Atlas.h:22,
+                 from /x/work/vslam/codes/vendor/ORB_SLAM3/include/MapDrawer.h:23,
