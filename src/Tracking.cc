@@ -1793,7 +1793,6 @@ void Tracking::ResetFrameIMU()
 
 void Tracking::Track()
 {
-
     if (bStepByStep)
     {
         std::cout << "Tracking: Waiting to the next step" << std::endl;

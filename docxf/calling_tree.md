@@ -1,0 +1,586 @@
+## ORB_SLAM3 Calling Tree (High‑Detail)
+
+Notation:
+- Each node is of the form: **Component::Function** (or **Class** / **Module**).
+- Children are *direct callees* or clearly downstream components.
+- Indentation uses **2 spaces** per level.
+
+This tree focuses on the **core SLAM pipeline** (tracking, mapping, loop closing, visualization, and I/O). Very low‑level helpers (e.g. STL, basic OpenCV ops) are omitted, and obviously repeated patterns are sometimes summarized.
+
+---
+
+- **Application / Datasets / Examples**
+  - **main / dataset runner**
+    - calls **ORB_SLAM3::System::System**
+    - calls **ORB_SLAM3::System::TrackStereo**
+    - calls **ORB_SLAM3::System::TrackRGBD**
+    - calls **ORB_SLAM3::System::TrackMonocular**
+    - calls **ORB_SLAM3::System::ChangeDataset**
+    - calls **ORB_SLAM3::System::Shutdown**
+    - calls trajectory saving:
+      - **ORB_SLAM3::System::SaveTrajectoryTUM**
+      - **ORB_SLAM3::System::SaveKeyFrameTrajectoryTUM**
+      - **ORB_SLAM3::System::SaveTrajectoryEuRoC**
+      - **ORB_SLAM3::System::SaveKeyFrameTrajectoryEuRoC**
+      - **ORB_SLAM3::System::SaveTrajectoryKITTI**
+    - calls atlas I/O:
+      - **ORB_SLAM3::System::SaveAtlas**
+      - **ORB_SLAM3::System::LoadAtlas**
+    - calls status / debug getters:
+      - **ORB_SLAM3::System::GetTrackingState**
+      - **ORB_SLAM3::System::GetTrackedMapPoints**
+      - **ORB_SLAM3::System::GetTrackedKeyPointsUn**
+      - **ORB_SLAM3::System::GetTimeFromIMUInit**
+      - **ORB_SLAM3::System::isLost**
+      - **ORB_SLAM3::System::isFinished**
+      - **ORB_SLAM3::System::GetImageScale**
+
+---
+
+- **ORB_SLAM3::System**
+  - **System::System (constructor)**
+    - uses **cv::FileStorage** to parse settings
+    - optionally constructs **Settings**
+      - **Settings::Settings**
+        - reads YAML settings (camera, IMU, viewer, atlas paths)
+      - provides accessors:
+        - **Settings::atlasLoadFile**
+        - **Settings::atlasSaveFile**
+        - **Settings::needToRectify**
+        - **Settings::needToResize**
+        - **Settings::M1l / M2l / M1r / M2r**
+        - **Settings::newImSize**
+        - **Settings::thFarPoints**
+    - sets vocabulary path and atlas filenames
+    - **if no atlas load file:**
+      - constructs **ORBVocabulary**
+        - **ORBVocabulary::ORBVocabulary**
+        - **ORBVocabulary::loadFromTextFile**
+      - constructs **KeyFrameDatabase**
+        - **KeyFrameDatabase::KeyFrameDatabase(ORBVocabulary&)**
+      - constructs **Atlas**
+        - **Atlas::Atlas(int initMapId)**
+    - **if atlas load file set:**
+      - constructs **ORBVocabulary** and loads from text file
+      - constructs **KeyFrameDatabase**
+      - calls **System::LoadAtlas**
+        - opens `.osa` file stream
+        - uses **boost::archive::text_iarchive** or **binary_iarchive**
+          - deserializes:
+            - vocabulary name
+            - vocabulary MD5 checksum
+            - **Atlas** object graph
+        - calls **System::CalculateCheckSum**
+        - calls **Atlas::SetKeyFrameDababase**
+        - calls **Atlas::SetORBVocabulary**
+        - calls **Atlas::PostLoad**
+      - calls **Atlas::CreateNewMap**
+    - inertial configuration:
+      - calls **Atlas::SetInertialSensor** (if IMU sensor)
+    - visualization helpers:
+      - constructs **FrameDrawer**
+        - **FrameDrawer::FrameDrawer(Atlas*)**
+      - constructs **MapDrawer**
+        - **MapDrawer::MapDrawer(Atlas*, std::string settings, Settings\*)**
+    - tracking thread (runs in main thread):
+      - constructs **Tracking**
+        - **Tracking::Tracking(System\*, ORBVocabulary\*, FrameDrawer\*, MapDrawer\*, Atlas\*, KeyFrameDatabase\*, settings path, eSensor, Settings\*, sequence id)**
+          - stores references to:
+            - `System`, `ORBVocabulary`, `FrameDrawer`, `MapDrawer`
+            - `Atlas`, current `Map`, `KeyFrameDatabase`
+            - `Settings` / sensor configuration
+          - initializes:
+            - ORB extractors: **ORBextractor**
+            - initial `Frame` state, IMU buffers, queues
+          - later, **SetLocalMapper**, **SetLoopClosing**, **SetViewer** are called from `System`
+    - local mapping thread:
+      - constructs **LocalMapping**
+        - **LocalMapping::LocalMapping(System\*, Atlas\*, bool bMonocular, bool bInertial, std::string seqName)**
+      - starts thread:
+        - `std::thread(&LocalMapping::Run, mpLocalMapper)`
+    - loop closing thread:
+      - constructs **LoopClosing**
+        - **LoopClosing::LoopClosing(Atlas\*, KeyFrameDatabase\*, ORBVocabulary\*, bool bFixScale, bool activeLC)**
+      - starts thread:
+        - `std::thread(&LoopClosing::Run, mpLoopCloser)`
+    - sets cross references:
+      - **Tracking::SetLocalMapper**
+      - **Tracking::SetLoopClosing**
+      - **LocalMapping::SetTracker**
+      - **LocalMapping::SetLoopCloser**
+      - **LoopClosing::SetTracker**
+      - **LoopClosing::SetLocalMapper**
+    - optional viewer:
+      - constructs **Viewer**
+        - **Viewer::Viewer(System\*, FrameDrawer\*, MapDrawer\*, Tracking\*, settings path, Settings\*)**
+      - starts thread:
+        - `std::thread(&Viewer::Run, mpViewer)`
+      - wiring:
+        - **Tracking::SetViewer**
+        - `LoopClosing::mpViewer = mpViewer`
+        - `Viewer::both = FrameDrawer::both` (shared display flags)
+    - sets verbosity:
+      - **Verbose::SetTh**
+  - **System::TrackStereo**
+    - checks sensor type
+    - pre‑processes images:
+      - if **Settings::needToRectify**
+        - calls **Settings::M1l/M2l/M1r/M2r**
+        - calls **cv::remap**
+      - else if **Settings::needToResize**
+        - calls **Settings::newImSize**
+        - calls **cv::resize**
+    - mode change block:
+      - locks `mMutexMode`
+      - if `mbActivateLocalizationMode`:
+        - calls **LocalMapping::RequestStop**
+        - busy‑wait `LocalMapping::isStopped`
+        - calls **Tracking::InformOnlyTracking(true)**
+      - if `mbDeactivateLocalizationMode`:
+        - calls **Tracking::InformOnlyTracking(false)**
+        - calls **LocalMapping::Release**
+    - reset block:
+      - locks `mMutexReset`
+      - if `mbReset`:
+        - calls **Tracking::Reset**
+        - clears flags
+      - else if `mbResetActiveMap`:
+        - calls **Tracking::ResetActiveMap**
+    - IMU block (if IMU_STEREO):
+      - loops over `vImuMeas`:
+        - calls **Tracking::GrabImuData**
+    - main tracking call:
+      - calls **Tracking::GrabImageStereo**
+    - state copy:
+      - reads **Tracking::mState**
+      - reads **Tracking::mCurrentFrame**:
+        - `mvpMapPoints`
+        - `mvKeysUn`
+    - returns **Sophus::SE3f** pose
+  - **System::TrackRGBD**
+    - similar structure:
+      - image resize via **Settings::needToResize** and **cv::resize**
+      - mode / reset blocks as above
+      - IMU block for **IMU_RGBD**:
+        - **Tracking::GrabImuData**
+      - main call:
+        - **Tracking::GrabImageRGBD**
+      - state copy and pose return
+  - **System::TrackMonocular**
+    - early shutdown check via `mbShutDown`
+    - sensor type check
+    - resize via **Settings::needToResize** / **cv::resize**
+    - mode / reset blocks
+      - monocular‑specific reset active map case:
+        - **Tracking::ResetActiveMap**
+    - IMU block for **IMU_MONOCULAR**:
+      - **Tracking::GrabImuData**
+    - main call:
+      - **Tracking::GrabImageMonocular**
+    - state copy and pose return
+  - **System::ActivateLocalizationMode / DeactivateLocalizationMode**
+    - set flags used inside `Track*` methods
+  - **System::MapChanged**
+    - calls **Atlas::GetLastBigChangeIdx**
+  - **System::Reset / ResetActiveMap**
+    - set flags used in `Track*`
+  - **System::Shutdown**
+    - sets `mbShutDown`
+    - prints "Shutdown"
+    - calls:
+      - **LocalMapping::RequestFinish**
+      - **LoopClosing::RequestFinish**
+    - conditionally:
+      - **System::SaveAtlas** if `mStrSaveAtlasToFile` set
+    - if timing registered:
+      - **Tracking::PrintTimeStats**
+  - **System::SaveTrajectoryTUM**
+    - calls **Atlas::GetAllKeyFrames**
+    - sorts keyframes by **KeyFrame::lId**
+    - uses **KeyFrame::GetPoseInverse**
+    - iterates over tracking lists:
+      - **Tracking::mlRelativeFramePoses**
+      - **Tracking::mlpReferences**
+      - **Tracking::mlFrameTimes**
+      - **Tracking::mlbLost**
+    - traverses keyframe tree:
+      - **KeyFrame::isBad**
+      - **KeyFrame::mTcp**
+      - **KeyFrame::GetParent**
+      - **KeyFrame::GetPose**
+    - converts to world pose and writes to file
+  - **System::SaveKeyFrameTrajectoryTUM**
+    - calls **Atlas::GetAllKeyFrames**
+    - sorts by **KeyFrame::lId**
+    - uses:
+      - **KeyFrame::isBad**
+      - **KeyFrame::GetPoseInverse**
+    - writes timestamps and poses
+  - **System::SaveTrajectoryEuRoC (global & per‑map)**
+    - calls **Atlas::GetAllMaps**
+    - per‑map:
+      - **Map::GetId**
+      - **Map::GetAllKeyFrames**
+    - sorts keyframes, uses:
+      - **KeyFrame::GetImuPose**
+      - **KeyFrame::GetPoseInverse**
+    - iterates over tracking lists as in TUM trajectory
+    - traverses keyframe tree, checks:
+      - **KeyFrame::isBad**
+      - **KeyFrame::GetParent**
+      - **KeyFrame::GetMap**
+    - uses IMU calibration:
+      - `KeyFrame::mImuCalib.mTbc`
+    - writes either body or camera pose depending on sensor
+  - **System::SaveKeyFrameTrajectoryEuRoC (global & per‑map)**
+    - similar to TUM keyframe variant but with EuRoC time convention
+    - uses:
+      - **KeyFrame::GetImuPose**
+      - **KeyFrame::GetPoseInverse**
+  - **System::SaveTrajectoryKITTI**
+    - calls **Atlas::GetAllKeyFrames**
+    - sorts **KeyFrame**s
+    - uses:
+      - **KeyFrame::GetPoseInverse**
+      - tracking lists as in EuRoC path
+    - converts to `Rwc`, `twc` and writes 3x4 matrices per line
+  - **System::SaveDebugData**
+    - calls **System::SaveTrajectoryEuRoC** (init trajectory)
+    - writes:
+      - `LocalMapping::mScale`
+      - `LocalMapping::mRwg`
+      - `LocalMapping::mCostTime`
+      - `LocalMapping::mbg`, `LocalMapping::mba`
+      - `LocalMapping::mcovInertial`
+      - `LocalMapping::mInitTime`
+  - **System::GetTrackingState / GetTrackedMapPoints / GetTrackedKeyPointsUn**
+    - returns members updated by `Track*` methods
+  - **System::GetTimeFromIMUInit / isLost / isFinished**
+    - uses:
+      - **LocalMapping::GetCurrKFTime**
+      - `LocalMapping::mFirstTs`
+      - **Atlas::isImuInitialized**
+      - `Tracking::mState`
+  - **System::ChangeDataset**
+    - calls:
+      - **Atlas::GetCurrentMap**
+      - **Map::KeyFramesInMap**
+    - depending on count:
+      - **Tracking::ResetActiveMap**
+      - or **Tracking::CreateMapInAtlas**
+    - then calls **Tracking::NewDataset**
+  - **System::GetImageScale**
+    - calls **Tracking::GetImageScale**
+  - **System::SaveAtlas**
+    - calls **Atlas::PreSave**
+    - builds path, removes existing file
+    - calculates vocabulary checksum via **System::CalculateCheckSum**
+    - serializes using:
+      - **boost::archive::text_oarchive** or **binary_oarchive**
+      - streaming **Atlas\***
+  - **System::LoadAtlas**
+    - as described under constructor
+  - **System::CalculateCheckSum**
+    - reads vocabulary file using `std::ifstream`
+    - calls:
+      - **MD5_Init**
+      - **MD5_Update**
+      - **MD5_Final**
+
+---
+
+- **ORB_SLAM3::Tracking**
+  - **Tracking::GrabImageStereo**
+    - constructs **Frame** (stereo constructor)
+      - **Frame::Frame(stereo args)**:
+        - calls **ORBextractor::operator()** (left image)
+        - calls **ORBextractor::operator()** (right image or shared extractor)
+        - computes stereo correspondences (baseline, disparity) using:
+          - camera intrinsics (from `Settings` or config)
+          - rectification parameters
+        - sets:
+          - keypoints (`mvKeys`, `mvKeysRight`)
+          - undistorted points (`mvKeysUn`)
+          - inverse depths
+    - inserts IMU data accumulated via **GrabImuData** (if inertial)
+      - **ImuTypes::Preintegrated** operations
+    - runs pipeline (approximate order, simplified):
+      - **Tracking::PreprocessFrame**
+      - **Tracking::Track**
+        - if initialization phase:
+          - **Tracking::StereoInitialization**
+            - **TwoViewReconstruction::ReconstructFromStereo**
+            - creates initial **Map**, **KeyFrame**, **MapPoints**
+            - inserts into **Atlas::GetCurrentMap**
+            - queues keyframe to **LocalMapping**
+        - else (normal tracking):
+          - **Tracking::TrackWithMotionModel**
+            - predicts pose from last frame / IMU
+            - matches map points using:
+              - **ORBmatcher::SearchByProjection**
+          - if failed / weak:
+            - **Tracking::TrackLocalMap**
+              - calls **Tracking::UpdateLocalMap**
+              - **Tracking::SearchLocalPoints**
+                - **ORBmatcher::SearchByProjection**
+          - if still lost:
+            - **Tracking::Relocalization**
+              - **KeyFrameDatabase::DetectRelocalizationCandidates**
+              - **ORBmatcher::SearchByBoW**
+              - pose estimation via:
+                - **Optimizer::PoseOptimization**
+          - in inertial case:
+            - **Tracking::PredictStateIMU**
+            - adds IMU constraints via **ImuTypes**
+        - decides whether to insert new keyframe:
+          - **Tracking::NeedNewKeyFrame**
+          - if yes:
+            - **Tracking::CreateNewKeyFrame**
+              - constructs **KeyFrame** from current `Frame`
+              - sets intra‑map links:
+                - **KeyFrame::AddObservation(MapPoint\*)**
+              - inserts keyframe into:
+                - **Atlas::GetCurrentMap::AddKeyFrame**
+                - **KeyFrameDatabase::add**
+              - sends to local mapper:
+                - **LocalMapping::InsertKeyFrame**
+      - updates visualization buffers:
+        - **FrameDrawer::Update**
+        - optionally also update `MapDrawer` (active pose path)
+    - sets `mCurrentFrame`, `mState` used by **System**
+    - returns `mCurrentFrame.mTcw`
+  - **Tracking::GrabImageRGBD**
+    - constructs **Frame** (RGBD constructor)
+      - uses:
+        - **ORBextractor**
+        - depth map to compute metric depth per keypoint
+    - shares most of the pipeline with stereo:
+      - initialization via **Tracking::RGBDInitialization**
+      - standard **TrackWithMotionModel**, **TrackLocalMap**, **Relocalization**
+      - keyframe decision and creation as above
+  - **Tracking::GrabImageMonocular**
+    - constructs **Frame** (monocular constructor)
+    - if not initialized:
+      - **Tracking::MonocularInitialization**
+        - uses:
+          - **TwoViewReconstruction**
+          - **GeometricTools** (fundamental/homography checks)
+          - **ORBmatcher** (feature matches across initial frames)
+        - creates initial **Map**, **KeyFrame**, **MapPoints**
+        - triggers **LocalMapping** for refinement
+    - if initialized:
+      - same core tracking pipeline as stereo/RGBD but without direct depth
+      - Tracking::Track()
+  - **Tracking::GrabImuData**
+    - pushes IMU points into local buffer
+    - updates preintegration structure:
+      - **ImuTypes::Preintegrated::IntegrateMeasurement**
+  - **Tracking::InformOnlyTracking**
+    - sets internal flag to avoid creating new keyframes / map changes
+  - **Tracking::Reset / ResetActiveMap / CreateMapInAtlas / NewDataset**
+    - interact with:
+      - **Atlas** (create / switch `Map`)
+      - **Map::Clear**
+      - `KeyFrameDatabase::clear` (or selective removal)
+  - **Tracking::GetImageScale**
+    - returns image pyramid scale used in ORB extraction
+
+---
+
+- **ORB_SLAM3::LocalMapping**
+  - **LocalMapping::Run (thread main loop)**
+    - waits for new keyframes from queue:
+      - **LocalMapping::CheckNewKeyFrames**
+    - while not finished:
+      - **LocalMapping::ProcessNewKeyFrame**
+        - fetches keyframe from queue
+        - updates:
+          - covisibility graph:
+            - **KeyFrame::UpdateConnections**
+          - local map:
+            - neighbors in **Map::GetAllKeyFrames**
+        - calls:
+          - **LocalMapping::ComputeStereoInliers** (stereo/RGBD)
+          - **LocalMapping::SearchInNeighbors**
+            - **ORBmatcher::SearchByProjection**
+      - **LocalMapping::CreateNewMapPoints**
+        - triangulates between new keyframe and neighbors using:
+          - **GeometricTools** (triangulation)
+          - camera geometry from `Frame` / `KeyFrame`
+        - creates **MapPoint** objects:
+          - **MapPoint::MapPoint(position, KeyFrame\*, Frame\*, index)**
+        - inserts into:
+          - **Map::AddMapPoint**
+          - `KeyFrame::AddObservation`
+      - **LocalMapping::MapPointCulling**
+        - iterates **MapPoint**s, removes outliers / low‑quality
+      - **Optimizer::LocalBundleAdjustment**
+        - optimizes poses of local **KeyFrame**s and **MapPoint**s
+        - uses:
+          - **G2oTypes** custom vertices/edges
+          - g2o solvers
+      - **LocalMapping::KeyFrameCulling**
+        - removes redundant keyframes:
+          - marks via **KeyFrame::SetBadFlag**
+      - notifies **LoopClosing** that new keyframes are available:
+        - **LoopClosing::InsertKeyFrame**
+    - responds to:
+      - **LocalMapping::RequestStop / isStopped / Release**
+      - **LocalMapping::RequestFinish / isFinished**
+  - **LocalMapping::GetCurrKFTime**
+    - used by **System::GetTimeFromIMUInit**
+
+---
+
+- **ORB_SLAM3::LoopClosing**
+  - **LoopClosing::Run (thread main loop)**
+    - waits for keyframes from queue:
+      - **LoopClosing::CheckNewKeyFrames**
+    - for each keyframe:
+      - **LoopClosing::DetectLoop**
+        - uses:
+          - **KeyFrameDatabase::DetectLoopCandidates**
+          - **ORBVocabulary** scoring
+      - if loop candidate found:
+        - **LoopClosing::ComputeSim3**
+          - uses:
+            - **ORBmatcher::SearchByBoW**
+            - **Sim3Solver** (RANSAC + optimization)
+        - **LoopClosing::CorrectLoop**
+          - fuses map structures:
+            - **LoopClosing::SearchAndFuse**
+              - **ORBmatcher::Fuse**
+          - optimizes:
+            - **Optimizer::OptimizeEssentialGraph** (pose graph)
+          - triggers:
+            - **Optimizer::GlobalBundleAdjustemnt** (possibly in another internal thread)
+          - notifies:
+            - **Tracking** (pause / resume during GBA)
+            - **LocalMapping** (stopping / resuming)
+    - if multiple maps exist:
+      - **LoopClosing::MergeLocal**
+      - **LoopClosing::MergeAtlas**
+        - again uses **Sim3Solver**, **Optimizer**, **ORBmatcher**
+
+---
+
+- **ORB_SLAM3::Viewer**
+  - **Viewer::Run (thread main loop)**
+    - initializes Pangolin window:
+      - `pangolin::CreateWindowAndBind`
+      - sets handlers, camera, etc.
+    - in render loop:
+      - queries:
+        - **System::GetTrackingState**
+        - **System::GetTrackedMapPoints**
+        - **System::GetTrackedKeyPointsUn**
+        - `Atlas` / `Map` via **MapDrawer**
+      - calls:
+        - **FrameDrawer::DrawFrame**
+        - **MapDrawer::DrawMapPoints**
+        - **MapDrawer::DrawKeyFrames**
+        - **MapDrawer::DrawCurrentCamera**
+      - interactively responds to UI controls
+    - responds to finish requests:
+      - **Viewer::RequestFinish / isFinished**
+
+---
+
+- **Core Data Structures and Utilities (Callers Overview)**
+  - **Frame**
+    - **called by**:
+      - **Tracking::GrabImageStereo / GrabImageRGBD / GrabImageMonocular**
+      - **KeyFrame** constructor (clone from frame)
+    - **internally calls**:
+      - **ORBextractor::operator()**
+      - **Converter** (type conversions)
+    - **used by**:
+      - **Tracking** (projection / back‑projection helpers)
+      - **LocalMapping**, **Optimizer** (frame data, poses)
+  - **KeyFrame**
+    - **created by**:
+      - **Tracking::CreateNewKeyFrame**
+      - initialization routines
+    - **called by**:
+      - **Map::AddKeyFrame / EraseKeyFrame**
+      - **KeyFrameDatabase::add / erase**
+      - **LocalMapping**, **LoopClosing**, **Optimizer**
+    - **internally calls**:
+      - **KeyFrame::UpdateConnections**
+      - **KeyFrame::AddObservation / EraseObservation**
+      - **Converter** utilities
+  - **MapPoint**
+    - **created by**:
+      - **LocalMapping::CreateNewMapPoints**
+      - stereo/RGBD initializations
+    - **called by**:
+      - **Map::AddMapPoint / EraseMapPoint**
+      - **Tracking** (projection, visibility checks)
+      - **Optimizer** (BA)
+      - **LoopClosing** (fusion)
+  - **Atlas**
+    - **called by**:
+      - **System** (creation, load/save, set inertial)
+      - **Tracking** (current map, map switching)
+      - **LocalMapping** (manipulate active map)
+      - **LoopClosing** (multiple map operations)
+      - **Viewer / MapDrawer** (read‑only visualization)
+  - **KeyFrameDatabase**
+    - **called by**:
+      - **Tracking::Relocalization**
+      - **LoopClosing::DetectLoop / MergeLocal / MergeAtlas**
+    - **internally uses**:
+      - **ORBVocabulary** to compute BoW vectors and scores
+  - **ORBextractor**
+    - **called by**:
+      - **Frame** constructors
+      - sometimes by **KeyFrame** when recalculating features
+  - **ORBmatcher**
+    - **called by**:
+      - **Tracking**:
+        - **SearchByProjection**
+        - **SearchByBoW**
+      - **LocalMapping**:
+        - **SearchByProjection**
+      - **LoopClosing**:
+        - **SearchByBoW**
+        - **Fuse**
+  - **Optimizer**
+    - **called by**:
+      - **Tracking**:
+        - **Optimizer::PoseOptimization**
+        - initialization refinements
+      - **LocalMapping**:
+        - **Optimizer::LocalBundleAdjustment**
+      - **LoopClosing**:
+        - **Optimizer::OptimizeEssentialGraph**
+        - **Optimizer::GlobalBundleAdjustemnt**
+        - **Optimizer::OptimizeSim3**
+    - **internally uses**:
+      - **G2oTypes** (custom graph primitives)
+      - g2o core library
+  - **TwoViewReconstruction**
+    - **called by**:
+      - **Tracking** (mono / stereo initialization)
+  - **GeometricTools**
+    - **called by**:
+      - **Tracking**, **LocalMapping**, **LoopClosing** for:
+        - triangulation
+        - epipolar geometry tests
+  - **Sim3Solver**
+    - **called by**:
+      - **LoopClosing** (loop and map‑merge alignment)
+  - **Converter**
+    - **called throughout**:
+      - `System` (old code paths)
+      - `Frame`, `KeyFrame`, `MapPoint`, `Optimizer`, `Viewer`
+  - **ImuTypes**
+    - **called by**:
+      - **Tracking** (IMU preintegration)
+      - **LocalMapping** (inertial initialization)
+      - **Optimizer** (IMU constraints in BA)
+
+---
+
+This calling tree is intentionally **deep but still conceptual**: it traces how control and data flow through the main ORB‑SLAM3 components without listing every tiny helper or standard‑library call. For precise per‑function cross‑references, specific `.cc` and `.h` files should be inspected in conjunction with this tree.
+
